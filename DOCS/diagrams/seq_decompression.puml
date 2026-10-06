@@ -1,0 +1,17 @@
+@startuml
+actor User
+participant "User Interface" as UI
+participant "File Manager" as FM
+participant "Header Manager" as HM
+participant "Huffman Tree" as HT
+participant "Decompressor" as DE
+
+User -> UI : Select compressed file
+UI -> FM : Open archive
+FM -> HM : Read and validate header
+HM -> HT : Provide tree information
+HT --> DE : Reconstructed tree
+DE -> FM : Write restored data
+FM --> UI : Completion status
+UI --> User : Show result
+@enduml
