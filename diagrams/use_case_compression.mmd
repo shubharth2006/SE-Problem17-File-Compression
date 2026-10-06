@@ -1,8 +1,0 @@
-flowchart LR
-    U[User] --> A((Select Input File))
-    U --> B((Compress File))
-    U --> C((View Compression Result))
-    B -. <<include>> .-> D((Read File Data))
-    B -. <<include>> .-> E((Build Huffman Tree))
-    B -. <<include>> .-> F((Generate Huffman Codes))
-    B -. <<include>> .-> G((Create Compressed File))
