@@ -1,0 +1,23 @@
+@startuml
+left to right direction
+actor User
+rectangle "File Compression Tool" {
+  usecase "Select Input Files/Folders" as A
+  usecase "View Selected Files" as B
+  usecase "Specify Archive Name & Destination" as C
+  usecase "Compress Files" as D
+  usecase "Display Compression Status" as E
+  usecase "Display Success/Error" as F
+  D ..> A : <<include>>
+  D ..> B : <<include>>
+  D ..> C : <<include>>
+  D ..> E : <<include>>
+  D ..> F : <<include>>
+}
+User --> A
+User --> B
+User --> C
+User --> D
+User --> E
+User --> F
+@enduml
