@@ -1,0 +1,19 @@
+sequenceDiagram
+    actor User
+    participant UI as Statistics/UI
+    participant FM as File Manager
+    participant FA as Frequency Analyzer
+    participant HT as Huffman Tree
+    participant CG as Code Generator
+    participant EN as Compressor
+    participant HM as Header Manager
+
+    User->>UI: Select input file
+    UI->>FM: Read input
+    FM-->>FA: File data
+    FA-->>HT: Frequencies
+    HT-->>CG: Huffman tree
+    CG-->>EN: Huffman codes
+    EN->>HM: Write metadata + compressed data
+    HM-->>UI: Compression result
+    UI-->>User: Show size and ratio
