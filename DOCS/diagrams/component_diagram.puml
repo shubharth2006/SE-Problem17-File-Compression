@@ -1,0 +1,30 @@
+@startuml
+skinparam componentStyle rectangle
+actor User
+component "User Interface" as UI
+component "File Manager" as FM
+component "Frequency Analyzer" as FA
+component "Huffman Tree Builder" as HT
+component "Code Generator" as CG
+component "Encoder / Compressor" as EN
+component "Header Manager" as HM
+component "Decoder / Decompressor" as DE
+component "Error Handling" as EH
+database "Compressed File" as CF
+database "Restored File" as RF
+
+User --> UI
+UI --> FM
+UI --> EH
+FM --> FA
+FA --> HT
+HT --> CG
+CG --> EN
+EN --> HM
+HM --> CF
+CF --> HM
+HM --> DE
+DE --> HT
+DE --> FM
+FM --> RF
+@enduml
