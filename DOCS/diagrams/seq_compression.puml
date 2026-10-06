@@ -1,0 +1,20 @@
+@startuml
+actor User
+participant "User Interface" as UI
+participant "File Manager" as FM
+participant "Frequency Analyzer" as FA
+participant "Huffman Tree" as HT
+participant "Code Generator" as CG
+participant "Compressor" as EN
+participant "Header Manager" as HM
+
+User -> UI : Select input file
+UI -> FM : Read input
+FM -> FA : Analyse file data
+FA -> HT : Send frequencies
+HT -> CG : Build codes
+CG -> EN : Provide Huffman codes
+EN -> HM : Write metadata and compressed data
+HM --> UI : Compression result
+UI --> User : Show status and ratio
+@enduml
