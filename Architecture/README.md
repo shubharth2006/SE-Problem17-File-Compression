@@ -1,11 +1,15 @@
 # Architecture & Design — Problem 17
 
-The project uses a modular layered architecture for a standalone C/C++ Huffman-based compression tool.
+This folder contains the Software Architecture and Design material for Group 15's File Compression Tool.
 
-## Main components
-File Manager, Frequency Analyzer, Huffman Tree Builder, Code Generator, Encoder/Compressor, Header Manager, Decoder/Decompressor, Statistics/UI, and Error Handling.
+It covers:
+- Architecture goals and constraints
+- Component architecture
+- Component descriptions
+- Architecture pattern and technology stack
+- Requirement traceability
+- Security architecture
+- Compression/decompression design flows
+- Two sequence diagrams
 
-## Main flows
-Compression: Select → Read → Frequency Analysis → Huffman Tree → Codes → Encode → Write.
-
-Decompression: Select → Validate Header → Reconstruct Tree → Decode → Restore File.
+The complete editable Markdown version is in Architecture.md. A formatted Word version is prepared separately as part of the submission package.
