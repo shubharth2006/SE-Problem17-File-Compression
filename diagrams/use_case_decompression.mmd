@@ -1,0 +1,8 @@
+flowchart LR
+    U[User] --> A((Select Compressed File))
+    U --> B((Decompress File))
+    U --> C((View Decompression Result))
+    B -. <<include>> .-> D((Read Compression Header))
+    B -. <<include>> .-> E((Reconstruct Huffman Tree))
+    B -. <<include>> .-> F((Decode Compressed Data))
+    B -. <<include>> .-> G((Restore Original File))
