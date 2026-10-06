@@ -1,0 +1,14 @@
+flowchart LR
+    U[User] --> UI[Statistics / UI]
+    UI --> FM[File Manager]
+    FM --> FA[Frequency Analyzer]
+    FA --> HT[Huffman Tree Builder]
+    HT --> CG[Code Generator]
+    CG --> EN[Encoder / Compressor]
+    EN --> HM[Header Manager]
+    HM --> CF[(Compressed File)]
+    HM --> DE[Decoder / Decompressor]
+    DE --> HT
+    DE --> FM
+    FM --> RF[(Restored File)]
+    UI --> EH[Error Handling]
