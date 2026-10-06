@@ -1,0 +1,25 @@
+@startuml
+left to right direction
+actor User
+rectangle "File Compression Tool" {
+  usecase "Select ZIP Archive" as A
+  usecase "Select Extraction Destination" as B
+  usecase "Extract Files" as C
+  usecase "Preserve Directory Structure" as D
+  usecase "Confirm Overwrite" as E
+  usecase "Display Extraction Status" as F
+  usecase "Display Success/Error" as G
+  C ..> A : <<include>>
+  C ..> B : <<include>>
+  C ..> D : <<include>>
+  C ..> F : <<include>>
+  C ..> G : <<include>>
+  E ..> C : <<extend>>
+}
+User --> A
+User --> B
+User --> C
+User --> E
+User --> F
+User --> G
+@enduml
