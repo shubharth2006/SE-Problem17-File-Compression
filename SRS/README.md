@@ -1,7 +1,10 @@
 # SRS — Problem 17
 
-This folder contains the Software Requirements Specification for the File Compression Tool.
+This folder contains the Software Requirements Specification material for Group 15's File Compression Tool.
 
-The SRS covers the project scope and requirements, including functional requirements, non-functional requirements, security objectives/requirements, UML use-case diagrams, and the Requirements Traceability Matrix (RTM).
+## Included
+- SRS Task 7: UML use-case diagrams
+- SRS Task 8: Requirements Traceability Matrix (RTM)
+- Editable Markdown/diagram source
 
-The formatted Word document is stored in this folder as the final submission document.
+A formatted Word version is prepared separately as part of the submission package.
