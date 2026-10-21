@@ -1,41 +1,81 @@
 # File Compression Tool
 
-## 1. What this project is
+Software Engineering mini-project (Group 15, Problem 17): a basic ZIP compression and extraction tool implemented in C++17.
 
-A Software Engineering course project (**Group 15, Problem 17**) for a **File Compression Tool (Basic ZIP Implementation)** using **C/C++** and **Huffman coding**.
+## What it does
 
-## 2. The core idea, in one paragraph
+The application can:
+- compress one or more files or folders into a ZIP archive
+- preserve nested directories
+- extract ZIP archives into a selected directory
+- list archive entries
+- show operation progress in the console
+- prevent accidental overwrites unless confirmed
+- reject malformed archives and unsafe extraction paths
+- verify extracted data with CRC-32
+- report basic Huffman coding statistics during compression
 
-The tool lets a user select files or folders, compress them into an archive, and later extract the contents. The compression side reads the input, builds frequency information, constructs a Huffman tree, generates codes, and writes the compressed data together with the information needed for extraction. During extraction, the stored information is read, the Huffman structure is reconstructed, and the original file contents are restored. The application is intended to run locally.
+The ZIP writer uses standard ZIP local-file header, central-directory, and end-of-central-directory records. File entries use the standard DEFLATE method when it produces a smaller result. DEFLATE uses Huffman coding internally, while the project also exposes a small Huffman analysis module for the compression flow.
 
-## 3. Main operations
+## Build
 
-**Compression:** Select input -> analyse data -> build Huffman tree -> generate codes -> encode -> create compressed file.
+### Linux / macOS
 
-**Extraction:** Select archive -> read/validate stored information -> reconstruct Huffman tree -> decode -> restore files.
+Requires C++17, CMake 3.16+ and zlib.
 
-## 4. Documentation
-
-All current submission documents and diagram sources are kept under [DOCS](DOCS/).
-
-- Software Requirements Specification (SRS)
-- Software Test Plan (STP)
-- Software Architecture and Design Specification (SAD)
-- UML and architecture diagram source files
-
-## 5. Repository layout
-
-```text
-DOCS/
-├── Software_Requirements_Specification_SRS.docx
-├── Software_Test_Plan_STP.docx
-├── Software_Architecture_and_Design_SAD.docx
-└── diagrams/
-    ├── use_case_compression.puml
-    ├── use_case_extraction.puml
-    ├── component_diagram.puml
-    ├── seq_compression.puml
-    └── seq_decompression.puml
+```bash
+cmake -S . -B build
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-The implementation can be added separately when the team is ready.
+### Windows
+
+Use CMake with a C++17 compiler and a zlib installation. The same CMake targets are used:
+
+```text
+file-compress
+smoke_test
+```
+
+## Run
+
+```bash
+file-compress compress sample.zip file1.txt folder/
+file-compress list sample.zip
+file-compress extract sample.zip extracted/
+```
+
+Add `--yes` to allow overwriting an existing archive or extracted file.
+
+Running `file-compress` without arguments opens a simple interactive menu.
+
+## Example
+
+```text
+$ file-compress compress project.zip input/
+  input/readme.txt  [24 bytes, 6 symbols, avg Huffman code 2.5 bits]
+  input/data.bin    [4096 bytes, ...]
+Created: "project.zip"
+
+$ file-compress extract project.zip output/
+  Extracted input/readme.txt (50%)
+  Extracted input/data.bin (100%)
+Extraction completed: 2 files -> "output"
+```
+
+## Repository layout
+
+```text
+src/                  Core implementation
+  main.cpp            Command-line interface
+  zip_archive.*       ZIP read/write, compression, extraction and safety checks
+  huffman.*           Huffman frequency/tree analysis
+tests/                Round-trip smoke test
+.github/workflows/    GitHub Actions build and test workflow
+DOCS/                 SRS, SAD, STP and UML/architecture diagrams
+```
+
+## Notes
+
+The implementation intentionally keeps the archive format limited to the basic ZIP features needed by the SRS. Large ZIP64 archives, encryption, and advanced archive metadata are outside the current project scope.

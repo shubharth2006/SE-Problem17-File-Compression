@@ -1,0 +1,7 @@
+/build/
+out/
+*.zip
+*.hzip
+.vscode/
+.idea/
+.DS_Store
