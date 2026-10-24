@@ -1,3 +1,4 @@
+#include <stdexcept>
 #include "zip_archive.hpp"
 
 #include <filesystem>
@@ -10,6 +11,38 @@ namespace fs = std::filesystem;
 int main() {
     const fs::path root = fs::current_path() / "smoke_workspace";
     fs::remove_all(root);
+        // Test 1: Missing input path must be rejected.
+    bool missing_input_rejected = false;
+
+    try {
+        ziptool::create_archive(
+            root / "missing.zip",
+            {{root / "does_not_exist.txt"}},
+            {true});
+    } catch (const std::exception&) {
+        missing_input_rejected = true;
+    }
+
+    if (!missing_input_rejected) {
+        std::cerr << "Missing input validation test failed.\n";
+        return 1;
+    }
+
+    // Test 2: Empty input list must be rejected.
+    bool empty_inputs_rejected = false;
+
+    try {
+        ziptool::create_archive(root / "empty.zip", {}, {true});
+    } catch (const std::exception&) {
+        empty_inputs_rejected = true;
+    }
+
+    if (!empty_inputs_rejected) {
+        std::cerr << "Empty input validation test failed.\n";
+        return 1;
+    }
+
+    std::cout << "Input validation tests passed.\n";
     fs::create_directories(root / "input/subdir");
 
     {

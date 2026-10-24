@@ -265,18 +265,29 @@ std::vector<Entry> build_entries(const std::vector<InputPath>& inputs) {
 
     std::vector<Entry> entries;
     std::set<std::string> names;
-
     for (const auto& item : inputs) {
-        std::error_code ec;
-        const auto abs = std::filesystem::absolute(item.path, ec);
-        if (ec) throw std::runtime_error(
-            "Invalid input path: " + item.path.string());
+     std::error_code ec;
+     const auto abs = std::filesystem::absolute(item.path, ec);
 
-        const bool is_dir = std::filesystem::is_directory(abs, ec);
-        const auto base = is_dir ? abs.parent_path() : abs.parent_path();
-        collect_path(abs, base, entries, names);
+    if (ec) {
+        throw std::runtime_error(
+            "Invalid input path: " + item.path.string());
     }
-    return entries;
+
+    const auto status = std::filesystem::status(abs, ec);
+
+    if (ec || !std::filesystem::exists(status)) {
+        throw std::runtime_error(
+            "Input does not exist or is inaccessible: " +
+            item.path.string());
+    }
+
+    const auto base = abs.parent_path();
+    collect_path(abs, base, entries, names);
+}
+
+return entries;
+
 }
 
 struct CentralRecord {
