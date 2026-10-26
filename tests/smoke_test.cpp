@@ -1,5 +1,6 @@
 #include "zip_archive.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -11,6 +12,7 @@ int main() {
     const fs::path root = fs::current_path() / "smoke_workspace";
     fs::remove_all(root);
     fs::create_directories(root / "input/subdir");
+    fs::create_directories(root / "input/empty/nested");
 
     {
         std::ofstream(root / "input/readme.txt")
@@ -26,8 +28,16 @@ int main() {
     ziptool::create_archive(archive, {{{root / "input"}}}, {true});
     const auto names = ziptool::list_archive(archive);
 
-    if (names.size() < 4) {
+    if (names.size() < 6) {
         std::cerr << "Expected directory and file entries.\n";
+        return 1;
+    }
+
+    if (std::find(names.begin(), names.end(), "input/subdir/data.bin") ==
+            names.end() ||
+        std::find(names.begin(), names.end(), "input/empty/nested/") ==
+            names.end()) {
+        std::cerr << "Archive did not preserve the original relative paths.\n";
         return 1;
     }
 
@@ -48,6 +58,11 @@ int main() {
 
     if (fs::file_size(root / "input/empty.txt") !=
         fs::file_size(output / "input/empty.txt")) return 1;
+
+    if (!fs::is_directory(output / "input/empty/nested")) {
+        std::cerr << "Empty nested directory was not restored.\n";
+        return 1;
+    }
 
     fs::remove_all(root);
     std::cout << "Smoke test passed.\n";
