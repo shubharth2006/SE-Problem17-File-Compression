@@ -12,7 +12,7 @@ namespace fs = std::filesystem;
 int main() {
     const fs::path root = fs::current_path() / "smoke_workspace";
     fs::remove_all(root);
-        // Test 1: Missing input path must be rejected.
+    // Test 1: Missing input path must be rejected.
     bool missing_input_rejected = false;
 
     try {
@@ -46,6 +46,34 @@ int main() {
     std::cout << "Input validation tests passed.\n";
     fs::create_directories(root / "input/subdir");
     fs::create_directories(root / "input/empty/nested");
+    // FCTG1-5: Reject plain text disguised as a ZIP archive.
+    const fs::path invalid_archive = root / "invalid.zip";
+
+    {
+        std::ofstream file(invalid_archive, std::ios::binary);
+        file << "This is plain text, not a ZIP archive.";
+        file.close();
+
+        if (!file) {
+            std::cerr << "Failed to create invalid ZIP test input.\n";
+            return 1;
+        }
+    }
+
+    bool invalid_archive_rejected = false;
+    try {
+        ziptool::list_archive(invalid_archive);
+    } catch (const std::runtime_error&) {
+        invalid_archive_rejected = true;
+    }
+
+    if (!invalid_archive_rejected) {
+        std::cerr << "Invalid ZIP rejection test failed.\n";
+        return 1;
+    }
+
+    fs::remove(invalid_archive);
+    std::cout << "Invalid ZIP rejection test passed.\n";
 
     {
         std::ofstream(root / "input/readme.txt")
