@@ -71,7 +71,20 @@ int main() {
         std::cerr << "Invalid ZIP rejection test failed.\n";
         return 1;
     }
+    // FCTG1-5: Extraction must also reject non-ZIP content.
+    bool invalid_extraction_rejected = false;
+    try {
+        ziptool::extract_archive(
+            invalid_archive, root / "invalid_output", {false});
+    } catch (const std::runtime_error&) {
+        invalid_extraction_rejected = true;
+    }
 
+    if (!invalid_extraction_rejected) {
+        std::cerr << "Invalid ZIP extraction rejection test failed.\n";
+        return 1;
+    }
+    std::cout << "Invalid ZIP extraction rejection test passed.\n";
     fs::remove(invalid_archive);
     std::cout << "Invalid ZIP rejection test passed.\n";
 
