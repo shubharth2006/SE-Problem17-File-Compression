@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <iterator>
 
 namespace fs = std::filesystem;
 
@@ -107,8 +108,16 @@ int main() {
     {
         std::ofstream(root / "input/readme.txt")
             << "compression smoke test\n";
-        std::ofstream(root / "input/subdir/data.bin", std::ios::binary)
-            << "\x00\x01\x02\x03\x04\x05";
+        std::ofstream binary_file(
+            root / "input/subdir/data.bin", std::ios::binary);
+
+        binary_file.write("\x00\x01\x02\x03\x04\x05", 6);
+        binary_file.close();
+
+        if (!binary_file) {
+            std::cerr << "Failed to create binary test input.\n";
+            return 1;
+        }
         std::ofstream(root / "input/empty.txt");
     }
 
@@ -150,7 +159,104 @@ int main() {
 
     std::cout << "Truncated ZIP archive rejection test passed.\n";
     fs::remove(truncated_archive);
+    // FCTG1-5: Detect corrupted ZIP file data using CRC-32.
+    const fs::path crc_input = root / "crc_input.txt";
+    const fs::path crc_archive = root / "crc_test.zip";
+    const fs::path corrupted_archive = root / "corrupted_data.zip";
 
+    const std::string payload = "Q7!z";
+
+    // Create a small file with known contents.
+    {
+        std::ofstream file(crc_input, std::ios::binary);
+        file << payload;
+
+        if (!file) {
+            std::cerr << "Failed to create CRC test input.\n";
+            return 1;
+        }
+    }
+
+    // Create a valid ZIP archive.
+    ziptool::create_archive(crc_archive, {{crc_input}}, {true});
+
+    // Read the ZIP archive into memory.
+    std::ifstream archive_file(crc_archive, std::ios::binary);
+
+    if (!archive_file) {
+        std::cerr << "Cannot open CRC test archive.\n";
+        return 1;
+    }
+
+    std::string archive_bytes(
+        (std::istreambuf_iterator<char>(archive_file)),
+        std::istreambuf_iterator<char>());
+
+    archive_file.close();
+
+    // Find the original file contents inside the ZIP.
+    const auto position = archive_bytes.find(payload);
+
+    if (position == std::string::npos) {
+        std::cerr << "CRC test payload not found in ZIP.\n";
+        return 1;
+    }
+
+    // Deliberately corrupt one byte.
+    archive_bytes[position] ^= 0x01;
+
+    // Save the corrupted ZIP as a separate file.
+    {
+        std::ofstream file(corrupted_archive, std::ios::binary);
+
+        file.write(
+            archive_bytes.data(),
+            static_cast<std::streamsize>(archive_bytes.size()));
+
+        if (!file) {
+            std::cerr << "Failed to write corrupted ZIP archive.\n";
+            return 1;
+        }
+    }
+
+    // Attempt extraction and verify CRC mismatch detection.
+    bool corruption_detected = false;
+
+    try {
+        ziptool::extract_archive(
+            corrupted_archive,
+            root / "corrupted_output",
+            {true});
+    } catch (const std::runtime_error& ex) {
+        if (std::string(ex.what()).find("CRC check failed") !=
+            std::string::npos) {
+            corruption_detected = true;
+        }
+    }
+
+    if (!corruption_detected) {
+        std::cerr << "Corrupted ZIP data detection test failed.\n";
+        return 1;
+    }
+
+    std::cout << "Corrupted ZIP data detection test passed.\n";
+    // FCTG1-5: Reject an archive path that is a directory.
+    const fs::path inaccessible_archive = root / "input";
+
+    bool file_access_error_detected = false;
+
+    try {
+        ziptool::list_archive(inaccessible_archive);
+    } catch (const std::runtime_error&) {
+        file_access_error_detected = true;
+    }
+
+    if (!file_access_error_detected) {
+        std::cerr << "File access error handling test failed.\n";
+        return 1;
+    }
+
+    std::cout << "File access error handling test passed.\n";
     if (names.size() < 6) {
         std::cerr << "Expected directory and file entries.\n";
         return 1;
