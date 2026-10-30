@@ -227,15 +227,15 @@ int main() {
     };
 
     if (!expect_rejected("../escaped.txt", "traversal.zip") ||
-        !expect_rejected("..\\\\escaped_backslash.txt", "backslash_traversal.zip") ||
+        !expect_rejected("..\\escaped_backslash.txt", "backslash_traversal.zip") ||
         !expect_rejected("/tmp/absolute.txt", "absolute_path.zip") ||
         !expect_rejected("C:/drive_path.txt", "drive_path.zip")) {
-        std::cerr << "Unsafe archive path was not rejected.\\n";
+        std::cerr << "Unsafe archive path was not rejected.\n";
         return 1;
     }
     if (fs::exists(root / "escaped.txt") ||
         fs::exists(root / "escaped_backslash.txt")) {
-        std::cerr << "Path traversal wrote outside the extraction directory.\\n";
+        std::cerr << "Path traversal wrote outside the extraction directory.\n";
         return 1;
     }
 
@@ -259,13 +259,13 @@ int main() {
     }
     if (!overwrite_blocked ||
         read(overwrite_output / overwrite_source.filename()) != "keep this file") {
-        std::cerr << "Existing file was not protected from an implicit overwrite.\\n";
+        std::cerr << "Existing file was not protected from an implicit overwrite.\n";
         return 1;
     }
 
     ziptool::extract_archive(overwrite_archive, overwrite_output, {true});
     if (read(overwrite_output / overwrite_source.filename()) != "replacement data") {
-        std::cerr << "Explicit overwrite did not replace the existing file.\\n";
+        std::cerr << "Explicit overwrite did not replace the existing file.\n";
         return 1;
     }
 
@@ -292,7 +292,7 @@ int main() {
             symlink_path_rejected = true;
         }
         if (!symlink_path_rejected || fs::exists(outside / "pwned.txt")) {
-            std::cerr << "Extraction followed a directory symlink.\\n";
+            std::cerr << "Extraction followed a directory symlink.\n";
             return 1;
         }
     }
