@@ -199,6 +199,95 @@ int main() {
     const fs::path output = root / "output";
 
     ziptool::create_archive(archive, {{{root / "input"}}}, {true});
+    // FCTG1-7: a truncated end record must be rejected, not partially parsed.
+    const fs::path truncated_archive = root / "truncated.zip";
+    fs::copy_file(archive, truncated_archive, fs::copy_options::overwrite_existing);
+    const auto archive_size = fs::file_size(truncated_archive);
+    if (archive_size <= 10) {
+        std::cerr << "Archive too small for truncation test.\\n";
+        return 1;
+    }
+    fs::resize_file(truncated_archive, archive_size - 10);
+    bool truncated_archive_rejected = false;
+    try {
+        ziptool::list_archive(truncated_archive);
+    } catch (const std::runtime_error&) {
+        truncated_archive_rejected = true;
+    }
+    if (!truncated_archive_rejected) {
+        std::cerr << "Truncated archive validation test failed.\\n";
+        return 1;
+    }
+
+    // FCTG1-7: altered central-directory CRC metadata must be rejected on extract.
+    const fs::path corrupt_crc_archive = root / "corrupt_crc.zip";
+    fs::copy_file(archive, corrupt_crc_archive,
+                  fs::copy_options::overwrite_existing);
+    {
+        std::fstream file(corrupt_crc_archive,
+                          std::ios::binary | std::ios::in | std::ios::out);
+        if (!file) {
+            std::cerr << "Could not open CRC corruption test archive.\\n";
+            return 1;
+        }
+        std::vector<char> bytes(
+            (std::istreambuf_iterator<char>(file)),
+            std::istreambuf_iterator<char>());
+        const char central_signature[] = {'P', 'K', 0x01, 0x02};
+        bool crc_changed = false;
+        auto search_from = bytes.begin();
+        while (search_from != bytes.end()) {
+            auto signature = std::search(
+                search_from, bytes.end(),
+                std::begin(central_signature), std::end(central_signature));
+            if (signature == bytes.end()) break;
+            const auto offset = static_cast<std::size_t>(
+                std::distance(bytes.begin(), signature));
+            if (bytes.size() - offset < 46) break;
+            const auto name_len = static_cast<unsigned char>(bytes[offset + 28]) |
+                (static_cast<unsigned char>(bytes[offset + 29]) << 8);
+            const auto extra_len = static_cast<unsigned char>(bytes[offset + 30]) |
+                (static_cast<unsigned char>(bytes[offset + 31]) << 8);
+            const auto comment_len = static_cast<unsigned char>(bytes[offset + 32]) |
+                (static_cast<unsigned char>(bytes[offset + 33]) << 8);
+            if (bytes.size() - offset < 46u + name_len + extra_len + comment_len) break;
+            const std::string entry_name(
+                bytes.begin() + static_cast<std::ptrdiff_t>(offset + 46),
+                bytes.begin() + static_cast<std::ptrdiff_t>(offset + 46 + name_len));
+            if (!entry_name.empty() && entry_name.back() != '/') {
+                bytes[offset + 16] ^= 0x01;
+                crc_changed = true;
+                break;
+            }
+            search_from = signature + 4;
+        }
+        if (!crc_changed) {
+            std::cerr << "Could not locate a file-entry CRC for test.\\n";
+            return 1;
+        }
+        file.clear();
+        file.seekp(0, std::ios::beg);
+        file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        file.close();
+        if (!file) {
+            std::cerr << "Could not write CRC corruption test archive.\\n";
+            return 1;
+        }
+    }
+    bool corrupt_crc_rejected = false;
+    try {
+        ziptool::extract_archive(corrupt_crc_archive,
+                                 root / "corrupt_crc_output", {true});
+    } catch (const std::runtime_error&) {
+        corrupt_crc_rejected = true;
+    }
+    if (!corrupt_crc_rejected) {
+        std::cerr << "Corrupted CRC metadata validation test failed.\\n";
+        return 1;
+    }
+    std::cout << "Archive integrity validation tests passed.\\n";
+
+
     const auto names = ziptool::list_archive(archive);
     // FCTG1-5: Reject a truncated ZIP archive.
     const fs::path truncated_archive = root / "truncated.zip";
