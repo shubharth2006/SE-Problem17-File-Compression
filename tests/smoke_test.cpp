@@ -2,12 +2,86 @@
 #include "zip_archive.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 
 namespace fs = std::filesystem;
+
+
+namespace {
+
+void write_u16(std::ostream& out, std::uint16_t value) {
+    const char bytes[2] = {
+        static_cast<char>(value & 0xff),
+        static_cast<char>((value >> 8) & 0xff)
+    };
+    out.write(bytes, 2);
+}
+
+void write_u32(std::ostream& out, std::uint32_t value) {
+    const char bytes[4] = {
+        static_cast<char>(value & 0xff),
+        static_cast<char>((value >> 8) & 0xff),
+        static_cast<char>((value >> 16) & 0xff),
+        static_cast<char>((value >> 24) & 0xff)
+    };
+    out.write(bytes, 4);
+}
+
+void write_empty_zip(const fs::path& archive, const std::string& entry_name) {
+    std::ofstream out(archive, std::ios::binary | std::ios::trunc);
+    if (!out) throw std::runtime_error("Could not create ZIP test archive.");
+
+    write_u32(out, 0x04034b50);
+    write_u16(out, 20);
+    write_u16(out, 0);
+    write_u16(out, 0);
+    write_u16(out, 0);
+    write_u16(out, 0);
+    write_u32(out, 0);
+    write_u32(out, 0);
+    write_u32(out, 0);
+    write_u16(out, static_cast<std::uint16_t>(entry_name.size()));
+    write_u16(out, 0);
+    out.write(entry_name.data(), static_cast<std::streamsize>(entry_name.size()));
+
+    const auto central_offset = static_cast<std::uint32_t>(out.tellp());
+    write_u32(out, 0x02014b50);
+    write_u16(out, 20);
+    write_u16(out, 20);
+    write_u16(out, 0);
+    write_u16(out, 0);
+    write_u16(out, 0);
+    write_u16(out, 0);
+    write_u32(out, 0);
+    write_u32(out, 0);
+    write_u32(out, 0);
+    write_u16(out, static_cast<std::uint16_t>(entry_name.size()));
+    write_u16(out, 0);
+    write_u16(out, 0);
+    write_u16(out, 0);
+    write_u16(out, 0);
+    write_u32(out, 0);
+    write_u32(out, 0);
+    out.write(entry_name.data(), static_cast<std::streamsize>(entry_name.size()));
+
+    const auto central_end = static_cast<std::uint32_t>(out.tellp());
+    write_u32(out, 0x06054b50);
+    write_u16(out, 0);
+    write_u16(out, 0);
+    write_u16(out, 1);
+    write_u16(out, 1);
+    write_u32(out, central_end - central_offset);
+    write_u32(out, central_offset);
+    write_u16(out, 0);
+
+    if (!out) throw std::runtime_error("Could not finish ZIP test archive.");
+}
+
+} // namespace
 
 int main() {
     const fs::path root = fs::current_path() / "smoke_workspace";
@@ -136,6 +210,91 @@ int main() {
     if (!fs::is_directory(output / "input/empty/nested")) {
         std::cerr << "Empty nested directory was not restored.\n";
         return 1;
+    }
+
+    // Path traversal must be rejected on both POSIX and Windows-style separators.
+    const auto traversal_output = root / "traversal_output";
+    const auto expect_rejected = [&](const std::string& entry_name,
+                                     const std::string& archive_name) {
+        const auto malicious_archive = root / archive_name;
+        write_empty_zip(malicious_archive, entry_name);
+        try {
+            ziptool::extract_archive(malicious_archive, traversal_output, {true});
+        } catch (const std::runtime_error&) {
+            return true;
+        }
+        return false;
+    };
+
+    if (!expect_rejected("../escaped.txt", "traversal.zip") ||
+        !expect_rejected("..\\\\escaped_backslash.txt", "backslash_traversal.zip") ||
+        !expect_rejected("/tmp/absolute.txt", "absolute_path.zip") ||
+        !expect_rejected("C:/drive_path.txt", "drive_path.zip")) {
+        std::cerr << "Unsafe archive path was not rejected.\\n";
+        return 1;
+    }
+    if (fs::exists(root / "escaped.txt") ||
+        fs::exists(root / "escaped_backslash.txt")) {
+        std::cerr << "Path traversal wrote outside the extraction directory.\\n";
+        return 1;
+    }
+
+    // Existing files stay untouched unless overwrite was explicitly enabled.
+    const auto overwrite_source = root / "overwrite_source.txt";
+    const auto overwrite_archive = root / "overwrite.zip";
+    const auto overwrite_output = root / "overwrite_output";
+    fs::create_directories(overwrite_output);
+    {
+        std::ofstream(overwrite_source) << "replacement data";
+        std::ofstream(overwrite_output / overwrite_source.filename())
+            << "keep this file";
+    }
+    ziptool::create_archive(overwrite_archive, {{overwrite_source}}, {true});
+
+    bool overwrite_blocked = false;
+    try {
+        ziptool::extract_archive(overwrite_archive, overwrite_output, {false});
+    } catch (const std::runtime_error&) {
+        overwrite_blocked = true;
+    }
+    if (!overwrite_blocked ||
+        read(overwrite_output / overwrite_source.filename()) != "keep this file") {
+        std::cerr << "Existing file was not protected from an implicit overwrite.\\n";
+        return 1;
+    }
+
+    ziptool::extract_archive(overwrite_archive, overwrite_output, {true});
+    if (read(overwrite_output / overwrite_source.filename()) != "replacement data") {
+        std::cerr << "Explicit overwrite did not replace the existing file.\\n";
+        return 1;
+    }
+
+    // A directory symlink inside the destination must not lead extraction outside it.
+    const auto symlink_output = root / "symlink_output";
+    const auto outside = root / "outside";
+    fs::create_directories(symlink_output);
+    fs::create_directories(outside);
+    bool symlink_supported = false;
+    try {
+        fs::create_directory_symlink(outside, symlink_output / "link");
+        symlink_supported = true;
+    } catch (const fs::filesystem_error&) {
+        // Symlink creation may be unavailable on some Windows configurations.
+    }
+
+    if (symlink_supported) {
+        const auto symlink_archive = root / "symlink_parent.zip";
+        write_empty_zip(symlink_archive, "link/pwned.txt");
+        bool symlink_path_rejected = false;
+        try {
+            ziptool::extract_archive(symlink_archive, symlink_output, {true});
+        } catch (const std::runtime_error&) {
+            symlink_path_rejected = true;
+        }
+        if (!symlink_path_rejected || fs::exists(outside / "pwned.txt")) {
+            std::cerr << "Extraction followed a directory symlink.\\n";
+            return 1;
+        }
     }
 
     fs::remove_all(root);
