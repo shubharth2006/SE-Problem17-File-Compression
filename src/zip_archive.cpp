@@ -181,6 +181,94 @@ std::filesystem::path safe_entry_path(const std::string& name, bool directory) {
     return relative;
 }
 
+
+std::filesystem::file_status no_follow_status(const std::filesystem::path& path) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(path, ec);
+    if (ec == std::errc::no_such_file_or_directory ||
+        ec == std::errc::not_a_directory) {
+        return std::filesystem::file_status(std::filesystem::file_type::not_found);
+    }
+    if (ec) {
+        throw std::runtime_error("Cannot inspect extraction path: " + path.string());
+    }
+    return status;
+}
+
+void check_safe_directory(const std::filesystem::path& root,
+                          const std::filesystem::path& relative,
+                          bool create_missing) {
+    auto current = root;
+    for (const auto& part : relative) {
+        current /= part;
+        auto status = no_follow_status(current);
+
+        if (status.type() == std::filesystem::file_type::symlink) {
+            throw std::runtime_error(
+                "Symbolic links are not allowed in extraction paths: " +
+                current.string());
+        }
+
+        if (status.type() == std::filesystem::file_type::not_found) {
+            if (!create_missing) continue;
+
+            std::error_code ec;
+            std::filesystem::create_directory(current, ec);
+            if (ec && ec != std::errc::file_exists) {
+                throw std::runtime_error(
+                    "Cannot create extraction directory: " + current.string());
+            }
+            status = no_follow_status(current);
+            if (status.type() == std::filesystem::file_type::symlink) {
+                throw std::runtime_error(
+                    "Symbolic links are not allowed in extraction paths: " +
+                    current.string());
+            }
+        }
+
+        if (!std::filesystem::is_directory(status)) {
+            throw std::runtime_error(
+                "Extraction path component is not a directory: " +
+                current.string());
+        }
+
+        if (!starts_with_path(canonicalish(current), root)) {
+            throw std::runtime_error(
+                "Extraction path resolves outside the destination: " +
+                current.string());
+        }
+    }
+}
+
+void check_safe_file_target(const std::filesystem::path& root,
+                            const std::filesystem::path& relative,
+                            bool overwrite) {
+    const auto target = root / relative;
+    const auto status = no_follow_status(target);
+
+    if (status.type() == std::filesystem::file_type::symlink) {
+        throw std::runtime_error(
+            "Refusing to write through a symbolic link: " + target.string());
+    }
+
+    if (status.type() != std::filesystem::file_type::not_found) {
+        if (!std::filesystem::is_regular_file(status)) {
+            throw std::runtime_error(
+                "Extraction target is not a regular file: " + target.string());
+        }
+        if (!overwrite) {
+            throw std::runtime_error(
+                "File already exists. Use --yes to overwrite: " + target.string());
+        }
+    }
+
+    if (!starts_with_path(canonicalish(target), root)) {
+        throw std::runtime_error(
+            "Extraction target resolves outside the destination: " +
+            target.string());
+    }
+}
+
 std::vector<std::uint8_t> deflate_data(const std::vector<std::uint8_t>& input) {
     if (input.empty()) return {};
 
@@ -660,7 +748,6 @@ void extract_archive(const std::filesystem::path& archive,
     planned.reserve(records.size());
     std::map<std::string, bool> entry_types;
 
-    // Validate every archive name before creating or writing anything.
     for (const auto& record : records) {
         auto relative = safe_entry_path(record.name, record.directory);
         const auto key = relative.generic_string();
@@ -670,7 +757,6 @@ void extract_archive(const std::filesystem::path& archive,
         planned.push_back({&record, std::move(relative)});
     }
 
-    // Reject file/directory conflicts such as "docs" and "docs/readme.txt".
     for (const auto& item : planned) {
         const auto key = item.relative.generic_string();
         auto parent = item.relative.parent_path();
@@ -694,12 +780,34 @@ void extract_archive(const std::filesystem::path& archive,
         }
     }
 
+    const auto destination_status = no_follow_status(destination);
+    if (destination_status.type() == std::filesystem::file_type::symlink) {
+        throw std::runtime_error(
+            "Extraction destination cannot be a symbolic link: " +
+            destination.string());
+    }
+
     std::error_code ec;
     std::filesystem::create_directories(destination, ec);
     if (ec) throw std::runtime_error(
         "Cannot create extraction directory: " + destination.string());
 
     const auto safe_root = canonicalish(destination);
+    if (!std::filesystem::is_directory(safe_root)) {
+        throw std::runtime_error(
+            "Extraction destination is not a directory: " + destination.string());
+    }
+
+    // Check all existing paths up front so a conflict cannot leave a partial extraction.
+    for (const auto& item : planned) {
+        if (item.record->directory) {
+            check_safe_directory(safe_root, item.relative, false);
+        } else {
+            check_safe_directory(safe_root, item.relative.parent_path(), false);
+            check_safe_file_target(safe_root, item.relative, options.overwrite);
+        }
+    }
+
     const auto total_files = std::count_if(
         records.begin(), records.end(),
         [](const auto& record) { return !record.directory; });
@@ -715,22 +823,12 @@ void extract_archive(const std::filesystem::path& archive,
         }
 
         if (record.directory) {
-            std::filesystem::create_directories(target, ec);
-            if (ec) throw std::runtime_error(
-                "Cannot create directory: " + target.string());
+            check_safe_directory(safe_root, item.relative, true);
             continue;
         }
 
-        const auto parent = target.parent_path();
-        std::filesystem::create_directories(parent, ec);
-        if (ec) throw std::runtime_error(
-            "Cannot create directory: " + parent.string());
-
-        if (std::filesystem::exists(target, ec) && !options.overwrite) {
-            throw std::runtime_error(
-                "File already exists. Use --yes to overwrite: " +
-                target.string());
-        }
+        check_safe_directory(safe_root, item.relative.parent_path(), true);
+        check_safe_file_target(safe_root, item.relative, options.overwrite);
 
         auto data = read_entry_data(in, record);
 
