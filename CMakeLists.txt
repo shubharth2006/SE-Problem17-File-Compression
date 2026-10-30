@@ -34,3 +34,4 @@ target_link_libraries(performance_test PRIVATE compression_core)
 
 enable_testing()
 add_test(NAME smoke_test COMMAND smoke_test)
+

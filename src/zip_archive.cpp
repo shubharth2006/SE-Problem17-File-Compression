@@ -302,35 +302,34 @@ struct CentralRecord {
 
 std::vector<CentralRecord> read_central_directory(std::ifstream& in) {
     in.seekg(0, std::ios::end);
-    const auto file_size = static_cast<std::uint64_t>(in.tellg());
-    const auto search = std::min<std::uint64_t>(file_size, 65557);
+    const auto end_position = in.tellg();
+    if (end_position < 0) {
+        throw std::runtime_error("Cannot determine archive size.");
+    }
+    const auto file_size = static_cast<std::uint64_t>(end_position);
+    constexpr std::uint64_t EOCD_SIZE = 22;
+    if (file_size < EOCD_SIZE) {
+        throw std::runtime_error("Not a valid basic ZIP archive: file is too small.");
+    }
 
+    const auto search = std::min<std::uint64_t>(file_size, 65557);
     in.seekg(static_cast<std::streamoff>(file_size - search), std::ios::beg);
     std::vector<char> tail(static_cast<std::size_t>(search));
     in.read(tail.data(), static_cast<std::streamsize>(tail.size()));
     if (!in) throw std::runtime_error("Cannot read archive tail.");
 
-    std::size_t eocd_pos = std::string::npos;
-    for (std::size_t i = tail.size(); i-- > 3;) {
-        if (static_cast<unsigned char>(tail[i - 3]) == 0x50 &&
-            static_cast<unsigned char>(tail[i - 2]) == 0x4b &&
-            static_cast<unsigned char>(tail[i - 1]) == 0x05 &&
-            static_cast<unsigned char>(tail[i]) == 0x06) {
-            eocd_pos = i - 3;
-            break;
+    auto read16_tail = [&](std::size_t pos) -> std::uint16_t {
+        if (pos > tail.size() || tail.size() - pos < 2) {
+            throw std::runtime_error("Corrupted archive: incomplete end record.");
         }
-    }
-    if (eocd_pos == std::string::npos) {
-        throw std::runtime_error(
-            "Not a valid basic ZIP archive: end record not found.");
-    }
-
-    auto read16_tail = [&](std::size_t pos) {
         return static_cast<std::uint16_t>(
             static_cast<unsigned char>(tail[pos]) |
             (static_cast<unsigned char>(tail[pos + 1]) << 8));
     };
-    auto read32_tail = [&](std::size_t pos) {
+    auto read32_tail = [&](std::size_t pos) -> std::uint32_t {
+        if (pos > tail.size() || tail.size() - pos < 4) {
+            throw std::runtime_error("Corrupted archive: incomplete end record.");
+        }
         return static_cast<std::uint32_t>(
             static_cast<unsigned char>(tail[pos]) |
             (static_cast<unsigned char>(tail[pos + 1]) << 8) |
@@ -338,22 +337,58 @@ std::vector<CentralRecord> read_central_directory(std::ifstream& in) {
             (static_cast<unsigned char>(tail[pos + 3]) << 24));
     };
 
+    std::size_t eocd_pos = std::string::npos;
+    for (std::size_t pos = tail.size() - 4 + 1; pos-- > 0;) {
+        if (tail[pos] == 'P' && tail[pos + 1] == 'K' &&
+            static_cast<unsigned char>(tail[pos + 2]) == 0x05 &&
+            static_cast<unsigned char>(tail[pos + 3]) == 0x06) {
+            if (pos + EOCD_SIZE > tail.size()) continue;
+            const auto comment_len = read16_tail(pos + 20);
+            if (pos + EOCD_SIZE + comment_len == tail.size()) {
+                eocd_pos = pos;
+                break;
+            }
+        }
+    }
+    if (eocd_pos == std::string::npos) {
+        throw std::runtime_error(
+            "Not a valid basic ZIP archive: complete end record not found.");
+    }
+
+    const auto disk_number = read16_tail(eocd_pos + 4);
+    const auto central_disk = read16_tail(eocd_pos + 6);
+    const auto disk_count = read16_tail(eocd_pos + 8);
     const auto count = read16_tail(eocd_pos + 10);
     const auto central_size = read32_tail(eocd_pos + 12);
     const auto central_offset = read32_tail(eocd_pos + 16);
+    const auto eocd_absolute = file_size - search + eocd_pos;
 
-    if (static_cast<std::uint64_t>(central_offset) + central_size > file_size) {
+    if (disk_number != 0 || central_disk != 0 || disk_count != count) {
         throw std::runtime_error(
-            "Corrupted archive: central directory is outside the file.");
+            "Archive uses unsupported multi-disk ZIP metadata.");
+    }
+    if (static_cast<std::uint64_t>(central_offset) + central_size !=
+        eocd_absolute) {
+        throw std::runtime_error(
+            "Corrupted archive: central directory bounds are inconsistent.");
     }
 
     in.clear();
     in.seekg(static_cast<std::streamoff>(central_offset), std::ios::beg);
+    if (!in) throw std::runtime_error("Cannot seek to central directory.");
 
     std::vector<CentralRecord> records;
     records.reserve(count);
+    const auto central_end = static_cast<std::uint64_t>(central_offset) +
+                             central_size;
 
     for (std::uint16_t i = 0; i < count; ++i) {
+        const auto entry_start = in.tellg();
+        if (entry_start < 0 ||
+            static_cast<std::uint64_t>(entry_start) + 46 > central_end) {
+            throw std::runtime_error(
+                "Corrupted archive: central-directory entry exceeds its bounds.");
+        }
         if (read_u32(in) != CENTRAL_SIG) {
             throw std::runtime_error(
                 "Corrupted archive: bad central-directory entry.");
@@ -376,13 +411,22 @@ std::vector<CentralRecord> read_central_directory(std::ifstream& in) {
         const auto name_len = read_u16(in);
         const auto extra_len = read_u16(in);
         const auto comment_len = read_u16(in);
-        read_u16(in); // disk start
+        const auto disk_start = read_u16(in);
         read_u16(in); // internal attrs
         read_u32(in); // external attrs
         const auto offset = read_u32(in);
 
+        const auto variable_size = static_cast<std::uint64_t>(name_len) +
+                                   extra_len + comment_len;
+        const auto current = in.tellg();
+        if (disk_start != 0 || current < 0 ||
+            static_cast<std::uint64_t>(current) + variable_size > central_end) {
+            throw std::runtime_error(
+                "Corrupted archive: invalid central-directory entry metadata.");
+        }
+
         std::string name(name_len, '\0');
-        if (name_len) in.read(name.data(), name_len);
+        if (name_len) in.read(name.data(), static_cast<std::streamsize>(name_len));
         in.seekg(static_cast<std::streamoff>(extra_len + comment_len),
                  std::ios::cur);
         if (!in) {
@@ -394,6 +438,13 @@ std::vector<CentralRecord> read_central_directory(std::ifstream& in) {
             name, method, crc, csize, usize, offset,
             !name.empty() && name.back() == '/'
         });
+    }
+
+    const auto final_position = in.tellg();
+    if (final_position < 0 ||
+        static_cast<std::uint64_t>(final_position) != central_end) {
+        throw std::runtime_error(
+            "Corrupted archive: central-directory size does not match its entries.");
     }
     return records;
 }
@@ -421,9 +472,15 @@ std::vector<std::uint8_t> read_entry_data(
 
     read_u16(in); // time
     read_u16(in); // date
-    read_u32(in); // crc
-    read_u32(in); // compressed size
-    read_u32(in); // uncompressed size
+    const auto local_crc = read_u32(in);
+    const auto local_compressed_size = read_u32(in);
+    const auto local_uncompressed_size = read_u32(in);
+    if (local_crc != record.crc ||
+        local_compressed_size != record.compressed_size ||
+        local_uncompressed_size != record.uncompressed_size) {
+        throw std::runtime_error(
+            "Corrupted archive: local and central entry metadata mismatch.");
+    }
 
     const auto name_len = read_u16(in);
     const auto extra_len = read_u16(in);
@@ -433,6 +490,20 @@ std::vector<std::uint8_t> read_entry_data(
         throw std::runtime_error(
             "Corrupted archive: invalid local header lengths.");
     }
+
+    const auto data_start = in.tellg();
+    in.seekg(0, std::ios::end);
+    const auto archive_end = in.tellg();
+    if (data_start < 0 || archive_end < 0 ||
+        static_cast<std::uint64_t>(data_start) > static_cast<std::uint64_t>(archive_end) ||
+        record.compressed_size >
+            static_cast<std::uint64_t>(archive_end) -
+            static_cast<std::uint64_t>(data_start)) {
+        throw std::runtime_error(
+            "Corrupted archive: entry data extends beyond the archive.");
+    }
+    in.clear();
+    in.seekg(data_start, std::ios::beg);
 
     std::vector<std::uint8_t> compressed(record.compressed_size);
     if (!compressed.empty()) {
