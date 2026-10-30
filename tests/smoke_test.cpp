@@ -295,6 +295,25 @@ int main() {
             std::cerr << "Extraction followed a directory symlink.\n";
             return 1;
         }
+
+        const auto protected_file = outside / "protected.txt";
+        {
+            std::ofstream(protected_file) << "outside data";
+        }
+        fs::create_symlink(protected_file, symlink_output / "protected.txt");
+
+        const auto symlink_file_archive = root / "symlink_file.zip";
+        write_empty_zip(symlink_file_archive, "protected.txt");
+        bool symlink_file_rejected = false;
+        try {
+            ziptool::extract_archive(symlink_file_archive, symlink_output, {true});
+        } catch (const std::runtime_error&) {
+            symlink_file_rejected = true;
+        }
+        if (!symlink_file_rejected || read(protected_file) != "outside data") {
+            std::cerr << "Extraction overwrote a file through a symlink.\n";
+            return 1;
+        }
     }
 
     fs::remove_all(root);
