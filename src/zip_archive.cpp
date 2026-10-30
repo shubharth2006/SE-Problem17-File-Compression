@@ -459,7 +459,13 @@ std::vector<CentralRecord> read_central_directory(std::ifstream& in) {
         throw std::runtime_error(
             "Not a valid basic ZIP archive: end record not found.");
     }
+    // FCTG1-5: Reject truncated ZIP end records.
+    constexpr std::size_t end_record_size = 22;
 
+    if (tail.size() - eocd_pos < end_record_size) {
+        throw std::runtime_error(
+            "Corrupted archive: truncated ZIP end record.");
+    }
     auto read16_tail = [&](std::size_t pos) {
         return static_cast<std::uint16_t>(
             static_cast<unsigned char>(tail[pos]) |
