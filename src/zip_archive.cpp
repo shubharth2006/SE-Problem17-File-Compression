@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -119,19 +120,153 @@ std::filesystem::path canonicalish(const std::filesystem::path& p) {
     return result.lexically_normal();
 }
 
-bool unsafe_entry_name(const std::string& name) {
-    if (name.empty()) return true;
-    if (name.front() == '/' || name.front() == '\\') return true;
-    if (name.size() >= 2 &&
-        std::isalpha(static_cast<unsigned char>(name[0])) &&
-        name[1] == ':') return true;
 
-    std::filesystem::path p(name);
-    if (p.is_absolute() || p.has_root_name() || p.has_root_directory()) return true;
-    for (const auto& part : p) {
-        if (part == "..") return true;
+std::filesystem::path safe_entry_path(const std::string& name, bool directory) {
+    if (name.empty() || name.find('\0') != std::string::npos) {
+        throw std::runtime_error("Archive contains an invalid entry name.");
     }
-    return false;
+
+    std::string normalized = name;
+    std::replace(normalized.begin(), normalized.end(), '\\', '/');
+
+    if (normalized.front() == '/') {
+        throw std::runtime_error("Absolute archive paths are not allowed: " + name);
+    }
+
+    const bool has_trailing_separator = normalized.back() == '/';
+    if (has_trailing_separator != directory) {
+        throw std::runtime_error("Archive entry type does not match its path: " + name);
+    }
+    if (directory) normalized.pop_back();
+    if (normalized.empty()) {
+        throw std::runtime_error("Archive contains an empty path.");
+    }
+
+    std::filesystem::path relative;
+    std::size_t start = 0;
+    while (start <= normalized.size()) {
+        const auto end = normalized.find('/', start);
+        const auto length = (end == std::string::npos)
+            ? normalized.size() - start : end - start;
+        const auto part = normalized.substr(start, length);
+
+        if (part.empty() || part == "." || part == ".." ||
+            part.find(':') != std::string::npos ||
+            part.back() == '.' || part.back() == ' ') {
+            throw std::runtime_error("Unsafe archive path rejected: " + name);
+        }
+
+        std::string device = part.substr(0, part.find('.'));
+        std::transform(device.begin(), device.end(), device.begin(),
+            [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+        const bool numbered_device =
+            (device.size() == 4 &&
+             (device.compare(0, 3, "COM") == 0 ||
+              device.compare(0, 3, "LPT") == 0) &&
+             device[3] >= '1' && device[3] <= '9');
+        if (device == "CON" || device == "PRN" || device == "AUX" ||
+            device == "NUL" || numbered_device) {
+            throw std::runtime_error("Unsafe archive path rejected: " + name);
+        }
+
+        relative /= part;
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+
+    if (relative.empty() || relative.is_absolute() ||
+        relative.has_root_name() || relative.has_root_directory()) {
+        throw std::runtime_error("Unsafe archive path rejected: " + name);
+    }
+    return relative;
+}
+
+
+std::filesystem::file_status no_follow_status(const std::filesystem::path& path) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(path, ec);
+    if (ec == std::errc::no_such_file_or_directory ||
+        ec == std::errc::not_a_directory) {
+        return std::filesystem::file_status(std::filesystem::file_type::not_found);
+    }
+    if (ec) {
+        throw std::runtime_error("Cannot inspect extraction path: " + path.string());
+    }
+    return status;
+}
+
+void check_safe_directory(const std::filesystem::path& root,
+                          const std::filesystem::path& relative,
+                          bool create_missing) {
+    auto current = root;
+    for (const auto& part : relative) {
+        current /= part;
+        auto status = no_follow_status(current);
+
+        if (status.type() == std::filesystem::file_type::symlink) {
+            throw std::runtime_error(
+                "Symbolic links are not allowed in extraction paths: " +
+                current.string());
+        }
+
+        if (status.type() == std::filesystem::file_type::not_found) {
+            if (!create_missing) continue;
+
+            std::error_code ec;
+            std::filesystem::create_directory(current, ec);
+            if (ec && ec != std::errc::file_exists) {
+                throw std::runtime_error(
+                    "Cannot create extraction directory: " + current.string());
+            }
+            status = no_follow_status(current);
+            if (status.type() == std::filesystem::file_type::symlink) {
+                throw std::runtime_error(
+                    "Symbolic links are not allowed in extraction paths: " +
+                    current.string());
+            }
+        }
+
+        if (!std::filesystem::is_directory(status)) {
+            throw std::runtime_error(
+                "Extraction path component is not a directory: " +
+                current.string());
+        }
+
+        if (!starts_with_path(canonicalish(current), root)) {
+            throw std::runtime_error(
+                "Extraction path resolves outside the destination: " +
+                current.string());
+        }
+    }
+}
+
+void check_safe_file_target(const std::filesystem::path& root,
+                            const std::filesystem::path& relative,
+                            bool overwrite) {
+    const auto target = root / relative;
+    const auto status = no_follow_status(target);
+
+    if (status.type() == std::filesystem::file_type::symlink) {
+        throw std::runtime_error(
+            "Refusing to write through a symbolic link: " + target.string());
+    }
+
+    if (status.type() != std::filesystem::file_type::not_found) {
+        if (!std::filesystem::is_regular_file(status)) {
+            throw std::runtime_error(
+                "Extraction target is not a regular file: " + target.string());
+        }
+        if (!overwrite) {
+            throw std::runtime_error(
+                "File already exists. Use --yes to overwrite: " + target.string());
+        }
+    }
+
+    if (!starts_with_path(canonicalish(target), root)) {
+        throw std::runtime_error(
+            "Extraction target resolves outside the destination: " +
+            target.string());
+    }
 }
 
 std::vector<std::uint8_t> deflate_data(const std::vector<std::uint8_t>& input) {
@@ -604,26 +739,83 @@ void extract_archive(const std::filesystem::path& archive,
 
     const auto records = read_central_directory(in);
 
+    struct PlannedEntry {
+        const CentralRecord* record;
+        std::filesystem::path relative;
+    };
+
+    std::vector<PlannedEntry> planned;
+    planned.reserve(records.size());
+    std::map<std::string, bool> entry_types;
+
+    for (const auto& record : records) {
+        auto relative = safe_entry_path(record.name, record.directory);
+        const auto key = relative.generic_string();
+        if (!entry_types.emplace(key, record.directory).second) {
+            throw std::runtime_error("Duplicate archive path rejected: " + record.name);
+        }
+        planned.push_back({&record, std::move(relative)});
+    }
+
+    for (const auto& item : planned) {
+        const auto key = item.relative.generic_string();
+        auto parent = item.relative.parent_path();
+        while (!parent.empty()) {
+            const auto found = entry_types.find(parent.generic_string());
+            if (found != entry_types.end() && !found->second) {
+                throw std::runtime_error(
+                    "Archive file conflicts with a directory path: " + parent.string());
+            }
+            parent = parent.parent_path();
+        }
+
+        if (!item.record->directory) {
+            const auto prefix = key + "/";
+            const auto child = entry_types.lower_bound(prefix);
+            if (child != entry_types.end() &&
+                child->first.compare(0, prefix.size(), prefix) == 0) {
+                throw std::runtime_error(
+                    "Archive file conflicts with a nested entry: " + key);
+            }
+        }
+    }
+
+    const auto destination_status = no_follow_status(destination);
+    if (destination_status.type() == std::filesystem::file_type::symlink) {
+        throw std::runtime_error(
+            "Extraction destination cannot be a symbolic link: " +
+            destination.string());
+    }
+
     std::error_code ec;
     std::filesystem::create_directories(destination, ec);
     if (ec) throw std::runtime_error(
         "Cannot create extraction directory: " + destination.string());
 
     const auto safe_root = canonicalish(destination);
+    if (!std::filesystem::is_directory(safe_root)) {
+        throw std::runtime_error(
+            "Extraction destination is not a directory: " + destination.string());
+    }
+
+    // Check all existing paths up front so a conflict cannot leave a partial extraction.
+    for (const auto& item : planned) {
+        if (item.record->directory) {
+            check_safe_directory(safe_root, item.relative, false);
+        } else {
+            check_safe_directory(safe_root, item.relative.parent_path(), false);
+            check_safe_file_target(safe_root, item.relative, options.overwrite);
+        }
+    }
+
     const auto total_files = std::count_if(
         records.begin(), records.end(),
         [](const auto& record) { return !record.directory; });
     std::size_t extracted = 0;
 
-    for (const auto& record : records) {
-        if (unsafe_entry_name(record.name)) {
-            throw std::runtime_error(
-                "Unsafe archive path rejected: " + record.name);
-        }
-
-        const auto target =
-            (safe_root / std::filesystem::path(record.name))
-            .lexically_normal();
+    for (const auto& item : planned) {
+        const auto& record = *item.record;
+        const auto target = (safe_root / item.relative).lexically_normal();
 
         if (!starts_with_path(target, safe_root)) {
             throw std::runtime_error(
@@ -631,22 +823,12 @@ void extract_archive(const std::filesystem::path& archive,
         }
 
         if (record.directory) {
-            std::filesystem::create_directories(target, ec);
-            if (ec) throw std::runtime_error(
-                "Cannot create directory: " + target.string());
+            check_safe_directory(safe_root, item.relative, true);
             continue;
         }
 
-        const auto parent = target.parent_path();
-        std::filesystem::create_directories(parent, ec);
-        if (ec) throw std::runtime_error(
-            "Cannot create directory: " + parent.string());
-
-        if (std::filesystem::exists(target, ec) && !options.overwrite) {
-            throw std::runtime_error(
-                "File already exists. Use --yes to overwrite: " +
-                target.string());
-        }
+        check_safe_directory(safe_root, item.relative.parent_path(), true);
+        check_safe_file_target(safe_root, item.relative, options.overwrite);
 
         auto data = read_entry_data(in, record);
 
