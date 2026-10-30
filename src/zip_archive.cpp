@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -119,19 +120,65 @@ std::filesystem::path canonicalish(const std::filesystem::path& p) {
     return result.lexically_normal();
 }
 
-bool unsafe_entry_name(const std::string& name) {
-    if (name.empty()) return true;
-    if (name.front() == '/' || name.front() == '\\') return true;
-    if (name.size() >= 2 &&
-        std::isalpha(static_cast<unsigned char>(name[0])) &&
-        name[1] == ':') return true;
 
-    std::filesystem::path p(name);
-    if (p.is_absolute() || p.has_root_name() || p.has_root_directory()) return true;
-    for (const auto& part : p) {
-        if (part == "..") return true;
+std::filesystem::path safe_entry_path(const std::string& name, bool directory) {
+    if (name.empty() || name.find('\0') != std::string::npos) {
+        throw std::runtime_error("Archive contains an invalid entry name.");
     }
-    return false;
+
+    std::string normalized = name;
+    std::replace(normalized.begin(), normalized.end(), '\\', '/');
+
+    if (normalized.front() == '/') {
+        throw std::runtime_error("Absolute archive paths are not allowed: " + name);
+    }
+
+    const bool has_trailing_separator = normalized.back() == '/';
+    if (has_trailing_separator != directory) {
+        throw std::runtime_error("Archive entry type does not match its path: " + name);
+    }
+    if (directory) normalized.pop_back();
+    if (normalized.empty()) {
+        throw std::runtime_error("Archive contains an empty path.");
+    }
+
+    std::filesystem::path relative;
+    std::size_t start = 0;
+    while (start <= normalized.size()) {
+        const auto end = normalized.find('/', start);
+        const auto length = (end == std::string::npos)
+            ? normalized.size() - start : end - start;
+        const auto part = normalized.substr(start, length);
+
+        if (part.empty() || part == "." || part == ".." ||
+            part.find(':') != std::string::npos ||
+            part.back() == '.' || part.back() == ' ') {
+            throw std::runtime_error("Unsafe archive path rejected: " + name);
+        }
+
+        std::string device = part.substr(0, part.find('.'));
+        std::transform(device.begin(), device.end(), device.begin(),
+            [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+        const bool numbered_device =
+            (device.size() == 4 &&
+             (device.compare(0, 3, "COM") == 0 ||
+              device.compare(0, 3, "LPT") == 0) &&
+             device[3] >= '1' && device[3] <= '9');
+        if (device == "CON" || device == "PRN" || device == "AUX" ||
+            device == "NUL" || numbered_device) {
+            throw std::runtime_error("Unsafe archive path rejected: " + name);
+        }
+
+        relative /= part;
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+
+    if (relative.empty() || relative.is_absolute() ||
+        relative.has_root_name() || relative.has_root_directory()) {
+        throw std::runtime_error("Unsafe archive path rejected: " + name);
+    }
+    return relative;
 }
 
 std::vector<std::uint8_t> deflate_data(const std::vector<std::uint8_t>& input) {
@@ -604,6 +651,49 @@ void extract_archive(const std::filesystem::path& archive,
 
     const auto records = read_central_directory(in);
 
+    struct PlannedEntry {
+        const CentralRecord* record;
+        std::filesystem::path relative;
+    };
+
+    std::vector<PlannedEntry> planned;
+    planned.reserve(records.size());
+    std::map<std::string, bool> entry_types;
+
+    // Validate every archive name before creating or writing anything.
+    for (const auto& record : records) {
+        auto relative = safe_entry_path(record.name, record.directory);
+        const auto key = relative.generic_string();
+        if (!entry_types.emplace(key, record.directory).second) {
+            throw std::runtime_error("Duplicate archive path rejected: " + record.name);
+        }
+        planned.push_back({&record, std::move(relative)});
+    }
+
+    // Reject file/directory conflicts such as "docs" and "docs/readme.txt".
+    for (const auto& item : planned) {
+        const auto key = item.relative.generic_string();
+        auto parent = item.relative.parent_path();
+        while (!parent.empty()) {
+            const auto found = entry_types.find(parent.generic_string());
+            if (found != entry_types.end() && !found->second) {
+                throw std::runtime_error(
+                    "Archive file conflicts with a directory path: " + parent.string());
+            }
+            parent = parent.parent_path();
+        }
+
+        if (!item.record->directory) {
+            const auto prefix = key + "/";
+            const auto child = entry_types.lower_bound(prefix);
+            if (child != entry_types.end() &&
+                child->first.compare(0, prefix.size(), prefix) == 0) {
+                throw std::runtime_error(
+                    "Archive file conflicts with a nested entry: " + key);
+            }
+        }
+    }
+
     std::error_code ec;
     std::filesystem::create_directories(destination, ec);
     if (ec) throw std::runtime_error(
@@ -615,15 +705,9 @@ void extract_archive(const std::filesystem::path& archive,
         [](const auto& record) { return !record.directory; });
     std::size_t extracted = 0;
 
-    for (const auto& record : records) {
-        if (unsafe_entry_name(record.name)) {
-            throw std::runtime_error(
-                "Unsafe archive path rejected: " + record.name);
-        }
-
-        const auto target =
-            (safe_root / std::filesystem::path(record.name))
-            .lexically_normal();
+    for (const auto& item : planned) {
+        const auto& record = *item.record;
+        const auto target = (safe_root / item.relative).lexically_normal();
 
         if (!starts_with_path(target, safe_root)) {
             throw std::runtime_error(
