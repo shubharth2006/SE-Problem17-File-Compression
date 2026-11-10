@@ -2,7 +2,7 @@
 
 The backend exposes the frontend contract:
 
-- `POST /api/compress`: multipart fields `files` (one or more files) and `archive_name`.
+- `POST /api/compress`: multipart field `files` (one or more files) and optional `archive_name` (defaults to `archive.zip`).
 - `POST /api/extract`: multipart field `file` (or `archive`) containing one ZIP. Returns `extracted.zip`.
 - `POST /api/list`: multipart field `file` (or `archive`) containing one ZIP. Returns `{ "files": [...] }`.
 

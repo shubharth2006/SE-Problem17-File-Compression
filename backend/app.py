@@ -50,7 +50,7 @@ def _safe_upload_name(name: str) -> str:
 
 
 def _archive_name(value: str | None) -> str:
-    value = (value or "").strip()
+    value = (value or "archive.zip").strip()
     if not ZIP_NAME_RE.fullmatch(value) or Path(value).name != value:
         raise ValueError("Invalid ZIP filename")
     return value
@@ -138,7 +138,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         return response
 
     @app.errorhandler(413)
-    def too_large(_error):
+    def too_large(exc):
         return _error("Request exceeds the upload size limit", 413)
 
     @app.route("/api/compress", methods=["POST"])
