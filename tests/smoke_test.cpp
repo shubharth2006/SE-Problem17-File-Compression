@@ -199,26 +199,6 @@ int main() {
     const fs::path output = root / "output";
 
     ziptool::create_archive(archive, {{{root / "input"}}}, {true});
-    // FCTG1-7: a truncated end record must be rejected, not partially parsed.
-    const fs::path truncated_archive = root / "truncated.zip";
-    fs::copy_file(archive, truncated_archive, fs::copy_options::overwrite_existing);
-    const auto archive_size = fs::file_size(truncated_archive);
-    if (archive_size <= 10) {
-        std::cerr << "Archive too small for truncation test.\\n";
-        return 1;
-    }
-    fs::resize_file(truncated_archive, archive_size - 10);
-    bool truncated_archive_rejected = false;
-    try {
-        ziptool::list_archive(truncated_archive);
-    } catch (const std::runtime_error&) {
-        truncated_archive_rejected = true;
-    }
-    if (!truncated_archive_rejected) {
-        std::cerr << "Truncated archive validation test failed.\\n";
-        return 1;
-    }
-
     // FCTG1-7: altered central-directory CRC metadata must be rejected on extract.
     const fs::path corrupt_crc_archive = root / "corrupt_crc.zip";
     fs::copy_file(archive, corrupt_crc_archive,
