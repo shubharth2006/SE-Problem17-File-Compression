@@ -24,6 +24,22 @@ DEFAULT_MAX_FILE_SIZE = 50 * 1024 * 1024
 DEFAULT_MAX_FILES = 100
 DEFAULT_TIMEOUT_SECONDS = 60
 ZIP_NAME_RE = re.compile(r"^[^/\\][^/\\]*\.zip$", re.IGNORECASE)
+INVALID_ZIP_MARKERS = (
+    "not a valid basic zip archive",
+    "corrupted archive",
+    "archive uses unsupported",
+    "archive contains an unsupported compression method",
+    "archive entry failed deflate decompression",
+    "crc check failed",
+    "unsafe archive path rejected",
+    "duplicate archive path rejected",
+    "archive file conflicts",
+    "archive contains an invalid entry name",
+    "archive entry type does not match",
+    "invalid local header",
+    "entry data extends beyond the archive",
+    "unexpected end of archive",
+)
 
 
 def _error(message: str, status: int):
@@ -67,8 +83,6 @@ def _file_size(file_storage) -> int:
 
 def _save_upload(file_storage, destination: Path, max_size: int) -> None:
     size = _file_size(file_storage)
-    if size <= 0:
-        raise ValueError("Uploaded files must not be empty")
     if size > max_size:
         raise ValueError("Uploaded file exceeds the size limit")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -98,10 +112,15 @@ def _command_error(result: subprocess.CompletedProcess[str]) -> str:
     return message[:500]
 
 
+def _is_invalid_zip_error(detail: str) -> bool:
+    detail = detail.lower()
+    return any(marker in detail for marker in INVALID_ZIP_MARKERS)
+
+
 def _successful(result: subprocess.CompletedProcess[str], operation: str) -> None:
     if result.returncode != 0:
         detail = _command_error(result)
-        if operation in {"extract", "list"}:
+        if operation in {"extract", "list"} and _is_invalid_zip_error(detail):
             raise ValueError("Invalid ZIP file")
         raise RuntimeError(detail)
 

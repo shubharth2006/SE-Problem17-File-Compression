@@ -6,7 +6,7 @@ The backend exposes the frontend contract:
 - `POST /api/extract`: multipart field `file` (or `archive`) containing one ZIP. Returns `extracted.zip`.
 - `POST /api/list`: multipart field `file` (or `archive`) containing one ZIP. Returns `{ "files": [...] }`.
 
-Errors use `{ "error": "..." }`. Uploads are limited to 100 MiB per request and 50 MiB per file by default. Override `MAX_CONTENT_LENGTH`, `MAX_FILE_SIZE`, `MAX_FILES`, and `COMPRESSION_BINARY` with environment variables.
+Errors use `{ "error": "..." }`; malformed or unsafe ZIPs return `400` with `Invalid ZIP file`, while executable and processing failures return `500` with their specific message. Empty files are valid ZIP inputs. Uploads are limited to 100 MiB per request and 50 MiB per file by default. Override `MAX_CONTENT_LENGTH`, `MAX_FILE_SIZE`, `MAX_FILES`, and `COMPRESSION_BINARY` with environment variables.
 
 ## Run
 

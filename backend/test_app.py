@@ -1,9 +1,11 @@
 from io import BytesIO
 from pathlib import Path
+import subprocess
 
 import pytest
+from werkzeug.datastructures import FileStorage
 
-from backend.app import _archive_name, create_app
+from backend.app import _archive_name, _save_upload, _successful, create_app
 
 
 @pytest.fixture
@@ -22,6 +24,26 @@ def test_compress_requires_files(client):
 def test_archive_name_defaults_to_archive_zip():
     assert _archive_name(None) == "archive.zip"
     assert _archive_name("") == "archive.zip"
+
+
+def test_empty_upload_is_allowed(tmp_path):
+    target = tmp_path / "empty.txt"
+    _save_upload(FileStorage(stream=BytesIO(), filename="empty.txt"), target, 10)
+    assert target.read_bytes() == b""
+
+
+def test_only_archive_validation_errors_are_invalid_zip():
+    invalid = subprocess.CompletedProcess(
+        args=[], returncode=1, stdout="", stderr="Error: corrupted archive: bad central directory"
+    )
+    with pytest.raises(ValueError, match="Invalid ZIP file"):
+        _successful(invalid, "list")
+
+    processing = subprocess.CompletedProcess(
+        args=[], returncode=1, stdout="", stderr="Error: Cannot create extraction directory"
+    )
+    with pytest.raises(RuntimeError, match="Cannot create extraction directory"):
+        _successful(processing, "extract")
 
 
 def test_oversized_request_returns_json_error():
