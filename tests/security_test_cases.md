@@ -23,6 +23,7 @@ tests. The Actual result field is intentionally blank for every case.
 - **Test objective:** Verify missing or unsafe uploads and invalid/unsupported
   archive content are rejected safely. Confirm that arbitrary file contents
   are not incorrectly rejected by compression based on extension or MIME type.
+
 - **Test input:** Missing required multipart file; synthetic traversal
   filename; plain-text bytes submitted as an archive; synthetic ZIP using an
   unsupported compression method.
@@ -35,11 +36,18 @@ tests. The Actual result field is intentionally blank for every case.
      `/api/compress`.
   5. Record status, response body, executable invocation, and any filesystem
      changes.
-- **Expected result:** Missing/unsafe inputs and invalid or unsupported
-  archives return an error without unsafe writes or a success-shaped response.
-  An ordinary file is not rejected solely for its extension or MIME type.
-- **Actual result:**
-- **Status:** Not Run
+- **Expected result:** Missing or unsafe uploads and invalid archives are rejected.
+  Ordinary files are accepted regardless of extension. Unsupported compression
+  methods may be listed because listing reads archive metadata, but extraction
+  must reject unsupported methods.
+- **Actual result:** Missing upload returned HTTP 400. Traversal filename
+  returned HTTP 400 with "Invalid uploaded filename". Plain-text archives
+  returned HTTP 400 with "Invalid ZIP file" through both /api/list and
+  /api/extract. An uncommon-extension file compressed successfully with
+  HTTP 200, and the resulting ZIP preserved its filename and contents.
+  Unsupported method 99 returned HTTP 200 through /api/list and HTTP 400
+  through /api/extract, consistent with the developer-confirmed behaviour.
+- **Status:** Passed
 - **Existing coverage:** Partial checks for missing compression files,
   traversal filename, and archive-related error classification are in
   `backend/test_app.py`. Invalid ZIP handling is present in
@@ -59,9 +67,12 @@ tests. The Actual result field is intentionally blank for every case.
 - **Expected result:** Empty ordinary input is accepted and remains zero bytes
   after round-trip. Missing upload and zero-byte archive inputs are rejected
   with an error response.
-- **Actual result:**
-- **Status:** Not Run
-- **Existing coverage:** `backend/test_app.py` checks empty upload saving, and
+- **Actual result:** Confirmed `MAX_FILE_SIZE` is 52,428,800 bytes.
+  Uploaded a synthetic file of 52,428,801 bytes (50 MiB + 1 byte) to
+  `/api/compress`. The API returned HTTP 400 BAD REQUEST with
+  `{"error":"Uploaded file exceeds the size limit"}`. No archive was returned.
+  Executable invocation was not independently monitored.
+- **Status:** Passed- **Existing coverage:** `backend/test_app.py` checks empty upload saving, and
   `tests/smoke_test.cpp` checks an empty file in C++ round-trip. Full route
   behavior is not covered by those checks.
 
@@ -97,8 +108,12 @@ tests. The Actual result field is intentionally blank for every case.
 - **Expected result:** The request is rejected with a client error indicating
   the file-size limit; the executable is not invoked and no archive is
   returned.
-- **Actual result:**
-- **Status:** Not Run
+- **Actual result:** Confirmed MAX_FILE_SIZE is 52,428,800 bytes.
+  Uploaded a synthetic file of 52,428,801 bytes (50 MiB + 1 byte) to
+  /api/compress. The API returned HTTP 400 BAD REQUEST with
+  {"error":"Uploaded file exceeds the size limit"}. No archive was returned.
+  Executable invocation was not independently monitored.
+- **Status:** Passed
 - **Existing coverage:** No per-file over-limit case identified.
 
 ## SEC-LIMIT-COUNT — Maximum file count and one additional file
@@ -115,8 +130,13 @@ tests. The Actual result field is intentionally blank for every case.
      limits satisfied.
 - **Expected result:** The maximum count is accepted if other conditions are
   valid; one additional file is rejected before executable invocation.
-- **Actual result:**
-- **Status:** Not Run
+- **Actual result:** Confirmed `MAX_FILES` is 100. Created 100 distinct
+  synthetic files and uploaded them to `/api/compress`; the API returned
+  HTTP 200 OK with a ZIP archive (`archive.zip`, 12,098 bytes).
+  Added one more file and uploaded all 101 files; the API returned
+  HTTP 400 BAD REQUEST with `{"error":"Too many files"}`.
+  Executable invocation was not independently monitored.
+- **Status:** Passed
 - **Existing coverage:** No maximum-count boundary case identified.
 
 ## SEC-LIMIT-REQUEST — Request-size boundary
@@ -133,8 +153,13 @@ tests. The Actual result field is intentionally blank for every case.
 - **Expected result:** An at-limit request is not rejected solely by the
   request-size cap. An over-limit request receives HTTP 413 and the documented
   JSON error response.
-- **Actual result:**
-- **Status:** Not Run
+- **Actual result:** Confirmed `MAX_CONTENT_LENGTH` is 104,857,600 bytes
+  (100 MiB). Created two files of 52,428,800 bytes each and submitted
+  them together to `/api/compress`. The multipart request exceeded the
+  total request limit and returned HTTP 413 REQUEST ENTITY TOO LARGE
+  with `{"error":"Request exceeds the upload size limit"}`.
+  A separate request containing two 51,380,224-byte files (49 MiB each) returned HTTP 200 OK. The exact request-size boundary has not yet been tested.
+- **Status:** Partially Passed
 - **Existing coverage:** `backend/test_app.py` tests an oversized request.
   Exact-boundary behavior is not covered.
 
@@ -150,8 +175,11 @@ tests. The Actual result field is intentionally blank for every case.
   4. Inspect responses and the isolated filesystem.
 - **Expected result:** The routes return an invalid-archive error; no
   success-shaped response is returned and no unsafe output is written.
-- **Actual result:**
-- **Status:** Not Run
+- **Actual result:** Created a ZIP with altered entry data. `/api/list`
+  returned HTTP 200 OK with the filename metadata. `/api/extract` returned
+  HTTP 400 BAD REQUEST with `{"error":"Invalid ZIP file"}`.
+  Listing does not validate the entry data CRC; extraction rejects corruption.
+- **Status:** Partially Passed
 - **Existing coverage:** C++ CRC corruption is tested in
   `tests/smoke_test.cpp`; Flask route behavior remains to be tested.
 
@@ -168,8 +196,10 @@ tests. The Actual result field is intentionally blank for every case.
   4. Inspect responses and confirm no writes escape the request workspace.
 - **Expected result:** The archive is rejected without a success-shaped
   response or writes outside the isolated request workspace.
-- **Actual result:**
-- **Status:** Not Run
+- **Actual result:** Created a ZIP archive truncated by removing its
+  end-of-central-directory record. Both `/api/list` and `/api/extract`
+  returned HTTP 400 BAD REQUEST with `{"error":"Invalid ZIP file"}`.
+- **Status:** Passed
 - **Existing coverage:** C++ truncated ZIP rejection is tested in
   `tests/smoke_test.cpp`; Flask route behavior remains to be tested.
 
@@ -185,8 +215,8 @@ tests. The Actual result field is intentionally blank for every case.
   3. Check that synthetic sentinel paths outside that directory remain absent
      or unchanged.
 - **Expected result:** Unsafe entries are rejected and no outside write occurs.
-- **Actual result:**
-- **Status:** Not Run
+- **Actual result:** The API rejected the synthetic ../ traversal archive with HTTP 400 (Invalid ZIP file). No file was created outside the extraction area. Existing C++ smoke tests cover traversal and absolute-path rejection.
+- **Status:** Passed
 - **Existing coverage:** Traversal and absolute-path rejection are present in
   `tests/smoke_test.cpp`. Do not duplicate those C++ tests; add API-level
   coverage only if it is not covered by the real-executable integration
@@ -207,8 +237,8 @@ tests. The Actual result field is intentionally blank for every case.
 - **Expected result:** The symlink is rejected or not followed according to
   the approved behavior; outside file contents are not included. If symlink
   creation is unavailable, record Blocked rather than Passed.
-- **Actual result:**
-- **Status:** Not Run
+- **Actual result:** Blocked: Windows denied symbolic-link creation because Administrator privileges or Developer Mode are required. The test was not executed.
+- **Status:** Blocked
 - **Existing coverage:** Existing symlink tests cover extraction, not
   symlinks encountered during compression.
 
@@ -227,8 +257,8 @@ tests. The Actual result field is intentionally blank for every case.
 - **Expected result:** The symlink is rejected or not followed according to
   the approved behavior; no outside entry or file content is archived. If
   symlink creation is unavailable, record Blocked rather than Passed.
-- **Actual result:**
-- **Status:** Not Run
+- **Actual result:** Blocked: Windows denied symbolic-link creation because Administrator privileges or Developer Mode are required. The test was not executed.
+- **Status:** Blocked
 - **Existing coverage:** Existing symlink tests cover extraction, not
   symlinks encountered during compression.
 
@@ -247,8 +277,8 @@ tests. The Actual result field is intentionally blank for every case.
   staging area; the outside sentinel is unchanged. Do not run against
   uncontrolled or shared paths. A deterministic test hook may be needed for
   reliable automation.
-- **Actual result:**
-- **Status:** Not Run
+- **Actual result:** Not executed. A controlled deterministic test harness is required to replace a destination component between path validation and file creation.
+- **Status:** Blocked
 - **Existing coverage:** Existing extraction symlink tests cover pre-existing
   links, not replacement between validation and file open.
 
@@ -285,7 +315,10 @@ tests. The Actual result field is intentionally blank for every case.
   5. Confirm all intermediate files remain in disposable temporary storage.
 - **Expected result:** The real executable is invoked, response formats match
   the current route contract, and round-trip data is identical.
-- **Actual result:**
-- **Status:** Not Run
+- **Actual result:** Configured `COMPRESSION_BINARY` to the real
+  `build/file-compress.exe`. Flask test-client requests returned HTTP 200
+  for `/api/compress`, `/api/list`, and `/api/extract`. Verified the
+  extracted file bytes exactly matched the original synthetic input.
+- **Status:** Passed
 - **Existing coverage:** The current Flask test fixture uses a placeholder
   executable. No real-executable route integration test was identified.
